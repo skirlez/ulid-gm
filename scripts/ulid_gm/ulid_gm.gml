@@ -23,16 +23,15 @@ SOFTWARE.
 
 // we can't really get unix time in milliseconds in gamemaker, so we just add current_time to this
 function _ulid_gm_unix_time() {
-	date_set_timezone(timezone_utc)
 	var unix_seconds = int64(date_second_span(date_create_datetime(1970, 1, 1, 0, 0, 0), date_current_datetime()));
 	return unix_seconds * int64(1000);
-	date_set_timezone(timezone_local)
 }
 
 // see the comment above generate_ulid for info about this flag
 global.ulid_gm_throw_on_random_overflow = true;
 
-function _generate_ulid_buffer_internal() {
+function _ulid_buffer_internal() {
+	gml_pragma("forceinline");
 	static buffer = buffer_create(16, buffer_fixed, 1)
 	buffer_seek(buffer, buffer_seek_start, 0)
 				
@@ -56,48 +55,47 @@ function _generate_ulid_buffer_internal() {
 	buffer_write(buffer, buffer_u16, epoch_16_swapped)
 	
 	static rand_16 = 0
-	static rand_64 = 0
+	static rand_32_1 = 0
+	static rand_32_2 = 0
 
 	if last_run != epoch {
 		rand_16 = int64(irandom(65536 - 1))
-		rand_64 = int64(irandom(4294967296 - 1)) << 32 | int64(irandom(4294967296 - 1))
+		rand_32_1 = int64(irandom(4294967296 - 1))
+		rand_32_2 = int64(irandom(4294967296 - 1))
 		last_run = epoch
 	}
 	else {
-		// per the spec, ulids should remain sortable
+		// as per the spec, ulids should remain sortable
 		// to ensure this, generations within the same millisecond (same timestamp component)
 		// have their random component increased by 1
 		// (this is the reason why we reverse byte order before writing the random data, 
 		// even though it's random, we need to be able to increment it properly)
 		
-		rand_64 += 1
-		if rand_64 == 0 {
-			rand_16 += 1
-			if rand_16 == 0 {
-				if global.ulid_gm_throw_on_random_overflow
-					throw "Random component of ULID overflowed"
+		rand_32_2 += 1
+		if rand_32_2 == 0 {
+			rand_32_1 += 1
+			if rand_32_1 == 0 {
+				rand_16 += 1
+				if rand_16 == 0 {
+					if global.ulid_gm_throw_on_random_overflow
+						throw "Random component of ULID overflowed"
+				}
 			}
 		}
 	}
 	
-	// this is the easiest way to swap byte order for an int64, as far as i can tell, 
-	// it can't be done as bit shifts because of signed shift right (0xFF00000000000000 >> 56 == -1)
-	
-	static swap_endianness_buffer = buffer_create(8, buffer_fixed, 1)
-	buffer_seek(swap_endianness_buffer, buffer_seek_start, 0)
-	buffer_write(swap_endianness_buffer, buffer_u64, rand_64)
-	buffer_seek(swap_endianness_buffer, buffer_seek_start, 0)
 	
 	buffer_write(buffer, buffer_u16, ((rand_16 & 0xFF) << 8) | (rand_16 >> 8))
-	buffer_write(buffer, buffer_u64,  
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 56) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 48) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 40) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 32) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 24) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 16) |
-								(int64(buffer_read(swap_endianness_buffer, buffer_u8)) << 8)  |
-								int64(buffer_read(swap_endianness_buffer, buffer_u8)))
+	
+	buffer_write(buffer, buffer_u32, ((rand_32_1 & 0x000000FF) << 24) |
+									 ((rand_32_1 & 0x0000FF00) << 8)  |
+									 ((rand_32_1 & 0x00FF0000) >> 8)  |
+									 ((rand_32_1 & 0xFF000000) >> 24))
+									 
+	buffer_write(buffer, buffer_u32, ((rand_32_2 & 0x000000FF) << 24) |
+									 ((rand_32_2 & 0x0000FF00) << 8)  |
+									 ((rand_32_2 & 0x00FF0000) >> 8)  |
+									 ((rand_32_2 & 0xFF000000) >> 24))
 					
 	buffer_seek(buffer, buffer_seek_start, 0)
 	return buffer;
@@ -105,30 +103,41 @@ function _generate_ulid_buffer_internal() {
 }
 
 /**
+* Generates and returns an uppercase ULID string.  
 *
-* Generates and returns a ULID string.  
-* Optionally accepts a `buffer` to create the ULID from. If a buffer is passed in, it will not be freed.
-*
-* If `global.ulid_gm_throw_on_random_overflow` is set,
+* If `global.ulid_gm_throw_on_random_overflow` is set (and it is by default),
 * this function will throw an error if the random component overflows
 * which can happen if an extremely large (around 2^79 on average) amount of ULIDs
 * are generated in the same millisecond.
 */
+function ulid_string() {
+	return ulid_string_from_buffer(_ulid_buffer_internal());
+}
 
-function generate_ulid(buffer = _generate_ulid_buffer_internal()) {
+
+
+/**
+* Creates a ULID string from a `buffer`. The function does not free `buffer`.
+*
+* Size checks are not done on `buffer` - it must have 
+* 16 readable bytes from its current seek position.
+*/
+function ulid_string_from_buffer(buffer) {
 	static characterset = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
 							65, 66, 67, 68, 69, 70, 71, 72, 74, 75, 77,
-							78, 80, 81,82, 83, 84, 86, 87, 88, 89, 90]
+							78, 80, 81, 82, 83, 84, 86, 87, 88, 89, 90]
+	static ulid_build = buffer_create(26 + 1, buffer_fixed, 1)
+	buffer_seek(ulid_build, buffer_seek_start, 0)
 	
-	static ulid = buffer_create(26, buffer_fixed, 1)
-	buffer_seek(ulid, buffer_seek_start, 0)
 	// add 2 here to make it 130 bits for 26 characters (they will be read as 0)
 	var bits_unread = 10;
 	var num = buffer_read(buffer, buffer_u8)
+	
+	// loop could be unrolled (but that's very boring)
 	for (var i = 0; i < 26; i++) {
 		var index;
 		if bits_unread < 5 {
-			static masks = [0, 1, 3, 7, 15, 31]
+			static masks = [0b00000, 0b00001, 0b00011, 0b00111, 0b01111, 0b11111]
 			var previous = num;
 			num = buffer_read(buffer, buffer_u8)
 			// stupid line. i promise it's correct
@@ -136,28 +145,65 @@ function generate_ulid(buffer = _generate_ulid_buffer_internal()) {
 		}
 		else
 			index = (num >> (bits_unread - 5)) & 31;
-		buffer_write(ulid, buffer_u8, characterset[index])
+		buffer_write(ulid_build, buffer_u8, characterset[index])
 		bits_unread -= 5;
 		if bits_unread < 0
 			bits_unread += 8
 	}
-	buffer_seek(ulid, buffer_seek_start, 0)
-	return buffer_read(ulid, buffer_string);
+	buffer_seek(ulid_build, buffer_seek_start, 0)
+	return buffer_read(ulid_build, buffer_string);
 }
 
-
 /**
+* Generates and returns a ULID as a 1-byte aligned fixed length buffer.
 *
-* Returns a ULID as a buffer of fixed length.
-*
-* If `global.ulid_gm_throw_on_random_overflow` is set,
+* If `global.ulid_gm_throw_on_random_overflow` is set (and it is by default),
 * this function will throw an error if the random component overflows
 * which can happen if an extremely large (around 2^79 on average) amount of ULIDs
 * are generated in the same millisecond.
 */
-function generate_ulid_buffer() {
-	var buffer = _generate_ulid_buffer_internal()
-	var out = buffer_create(16, buffer_fixed, 1)
-	buffer_copy(buffer, 0, 16, out, 0)
-	return out
+
+function ulid_buffer() {
+	var ulid = buffer_create(16, buffer_fixed, 1)
+	var buffer = _ulid_buffer_internal()
+	buffer_copy(buffer, 0, 16, ulid, 0)
+	return ulid;
+}
+
+/**
+* Creates a ULID buffer from a string (`str`).
+* Validity checks are not performed on `str` - it should have at least 26 characters,
+* and those characters should be from the uppercase ULID character set.
+*/
+function ulid_buffer_from_string(str) {
+	var ulid = buffer_create(16, buffer_fixed, 1)
+	// table mapping (character ordinal - 48) -> index in the character set
+	static reverse_table = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+							0, 0, 0, 0, 0, 0, 0, 10, 11, 12,
+							13, 14, 15, 16, 17, 0, 18, 19, 0,
+							20, 21, 0, 22, 23, 24, 25, 26, 0,
+							27, 28, 29, 30, 31];
+	var bits_read = -2;
+	var accum = 0;
+		
+	// loop could be unrolled (but that's very boring)
+	for (var i = 1; i < 26 + 1; i++) {
+		var ordinal = string_ord_at(str, i)
+		if bits_read < 3 {
+			accum = (accum << 5) | reverse_table[ordinal - 48]
+		}
+		else {
+			static masks = [0b00000, 0b00001, 0b00011, 0b00111, 0b01111, 0b11111]
+			var complete_to_8 = 8 - bits_read
+			var index = reverse_table[ordinal - 48]
+			accum = (accum << complete_to_8) | (index >> (5 - complete_to_8))
+			buffer_write(ulid, buffer_u8, accum)
+			accum = index & (masks[5 - complete_to_8])
+		}
+		bits_read += 5
+		if bits_read >= 8
+			bits_read -= 8
+	}
+	buffer_seek(ulid, buffer_seek_start, 0)
+	return ulid;
 }

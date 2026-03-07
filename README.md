@@ -1,23 +1,32 @@
 # ulid-gm
 
-An implementation of [ULID](https://github.com/ulid/spec) in GameMaker.
+An implementation of [ULID](https://github.com/ulid/spec) for GameMaker.
 
 Originally written for [Void Stranger Endless Void](https://github.com/skirlez/void-stranger-endless-void), I've polished it up, made it correct (as far as I can tell)
 
 ## Usage
 
-### `generate_ulid([buffer])`
-Generates and returns a ULID string.
-Optionally accepts a `buffer` to create the ULID from. If a buffer is passed in, it will not be freed.
+### `ulid_string()`
+Generates and returns an uppercase ULID string.  
 
-### `generate_ulid_buffer()`
-Returns a ULID as a buffer of fixed length.
+### `ulid_string_from_buffer(buffer)`
+Creates a ULID string from a `buffer`. The function does not free `buffer`.
+Size checks are not done on `buffer` - it must have 16 readable bytes from its current seek position.
 
-### Small Quirk
-If `global.ulid_gm_throw_on_random_overflow` is set, functions will throw an error if the random component overflows
+### `ulid_buffer()`
+Generates and returns a ULID as a 1-byte aligned fixed length buffer.
+
+### `ulid_buffer_from_string(str)`
+Creates a ULID buffer from a string (`str`).
+Validity checks are not performed on `str` - it should use only the ULID characterset, be uppercase, and have at least 26 characters.
+
+### Random Component Overflow
+If `global.ulid_gm_throw_on_random_overflow` is set, `ulid_string()` and `ulid_buffer()` will throw an error if the random component overflows (following the spec).
 which can happen if an extremely large (around 2^79 on average) amount of ULIDs are generated in the same millisecond.
 
-**Note that it is set to true by default**. Though probabilistically speaking no one will ever encounter this issue.
+**Note that this global is set to `true` by default!** You can turn it off if you don't care about sorting ULIDs, or just catch the exception.
+
+Though probabilistically speaking, even if the global is set to `true`, no one will ever encounter this error.
 
 ## License
 The code is licensed under the terms of the MIT license, found in this repository.
