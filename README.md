@@ -10,8 +10,8 @@ Originally written for [Void Stranger Endless Void](https://github.com/skirlez/v
 Generates and returns an uppercase ULID string.  
 
 ### `ulid_string_from_buffer(buffer)`
-Creates a ULID string from a `buffer`. The function does not free `buffer`.
-Size checks are not done on `buffer` - it must have 16 readable bytes from its current seek position.
+Creates an uppercase ULID string from a `buffer`. The function does not free `buffer`.
+Validity checks are not performed on `buffer` - it must have 16 readable bytes from its current seek position.
 
 ### `ulid_buffer()`
 Generates and returns a ULID as a 1-byte aligned fixed length buffer.

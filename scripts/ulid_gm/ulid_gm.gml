@@ -23,15 +23,30 @@ SOFTWARE.
 
 // we can't really get unix time in milliseconds in gamemaker, so we just add current_time to this
 function _ulid_gm_unix_time() {
+	gml_pragma("forceinline");
+	
+	// we force the timezone to be UTC to fix a crash (https://github.com/YoYoGames/GameMaker-Bugs/issues/13411),
+	// and also I think it's more correct (but i'm not sure)
+	var save_timezone = date_get_timezone()
+	date_set_timezone(timezone_utc)
+	
 	var unix_seconds = int64(date_second_span(date_create_datetime(1970, 1, 1, 0, 0, 0), date_current_datetime()));
+	date_set_timezone(save_timezone)
 	return unix_seconds * int64(1000);
 }
 
-// see the comment above generate_ulid for info about this flag
+/**
+* If this global is set (and it is by default),
+* all ULID-generating functions will throw an error if the random component overflows
+* which can happen if an extremely large (around 2^79 on average) amount of ULIDs
+* are generated in the same millisecond.
+*/
 global.ulid_gm_throw_on_random_overflow = true;
 
 function _ulid_buffer_internal() {
 	gml_pragma("forceinline");
+	
+	// this buffer gets reused across calls
 	static buffer = buffer_create(16, buffer_fixed, 1)
 	buffer_seek(buffer, buffer_seek_start, 0)
 				
@@ -59,9 +74,9 @@ function _ulid_buffer_internal() {
 	static rand_32_2 = 0
 
 	if last_run != epoch {
-		rand_16 = int64(irandom(65536 - 1))
-		rand_32_1 = int64(irandom(4294967296 - 1))
-		rand_32_2 = int64(irandom(4294967296 - 1))
+		rand_16 = int64(irandom((1 << 16) - 1))
+		rand_32_1 = int64(irandom((1 << 32) - 1))
+		rand_32_2 = int64(irandom((1 << 32) - 1))
 		last_run = epoch
 	}
 	else {
@@ -117,9 +132,9 @@ function ulid_string() {
 
 
 /**
-* Creates a ULID string from a `buffer`. The function does not free `buffer`.
+* Creates an uppercase ULID string from a `buffer`. The function does not free `buffer`.
 *
-* Size checks are not done on `buffer` - it must have 
+* Validity checks are not performed on `buffer` - it must have 
 * 16 readable bytes from its current seek position.
 */
 function ulid_string_from_buffer(buffer) {
@@ -162,7 +177,6 @@ function ulid_string_from_buffer(buffer) {
 * which can happen if an extremely large (around 2^79 on average) amount of ULIDs
 * are generated in the same millisecond.
 */
-
 function ulid_buffer() {
 	var ulid = buffer_create(16, buffer_fixed, 1)
 	var buffer = _ulid_buffer_internal()
